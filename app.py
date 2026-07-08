@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from collections import defaultdict
 import time
 import uuid
 
@@ -14,6 +15,7 @@ def root():
     return {"status": "running"}
 
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,11 +26,13 @@ app.add_middleware(
 
 TOTAL_ORDERS = 45
 RATE_LIMIT = 16
-WINDOW = 10
+WINDOW = 10  # seconds
 
+# In-memory stores
 idempotency_store = {}
-client_requests = {}
+client_requests = defaultdict(list)
 
+# Fixed catalog
 catalog = [
     {"id": i, "item": f"Order-{i}"}
     for i in range(1, TOTAL_ORDERS + 1)
@@ -40,18 +44,24 @@ async def rate_limit(request: Request, call_next):
     client = request.headers.get("X-Client-Id", "anonymous")
     now = time.time()
 
-    history = client_requests.setdefault(client, [])
-    history[:] = [t for t in history if now - t < WINDOW]
+    # Keep only requests in the last WINDOW seconds
+    client_requests[client] = [
+        t for t in client_requests[client]
+        if now - t < WINDOW
+    ]
 
-    if len(history) >= RATE_LIMIT:
+    # Reject after RATE_LIMIT requests
+    if len(client_requests[client]) >= RATE_LIMIT:
         return JSONResponse(
             status_code=429,
             content={"detail": "Rate limit exceeded"},
-            headers={"Retry-After": "10"},
+            headers={"Retry-After": str(WINDOW)},
         )
 
-    history.append(now)
-    return await call_next(request)
+    client_requests[client].append(now)
+
+    response = await call_next(request)
+    return response
 
 
 @app.post("/orders", status_code=201)
@@ -74,6 +84,7 @@ def list_orders(limit: int = 10, cursor: str | None = None):
     end = min(start + limit, TOTAL_ORDERS)
 
     items = catalog[start:end]
+
     next_cursor = str(end) if end < TOTAL_ORDERS else None
 
     return {
