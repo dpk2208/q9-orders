@@ -58,7 +58,7 @@ async def rate_limit(request: Request, call_next):
         return await call_next(request)
 
     # Only rate limit the Orders API
-    if request.url.path != "/orders":
+    if request.method != "GET" or request.url.path != "/orders":
         return await call_next(request)
 
     client = request.headers.get("X-Client-Id", "anonymous")
